@@ -7,6 +7,7 @@ type LoopState = {
 	objective: string;
 	iteration: number;
 	maxIterations: number;
+	intervalMs: number;
 	continuePrompt: string;
 	stopReason?: string;
 };
@@ -15,8 +16,26 @@ const DEFAULT_MAX_ITERATIONS = 25;
 const DEFAULT_CONTINUE_PROMPT = "Continue the loop.";
 const DONE_MARKER = "LOOP_DONE";
 
+function parseDuration(value: string): number | undefined {
+	const match = value.trim().match(/^(\d+(?:\.\d+)?)(ms|s|m|h)$/i);
+	if (!match) return undefined;
+
+	const amount = Number(match[1]);
+	const unit = match[2].toLowerCase();
+	const multiplier = unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : 60 * 60_000;
+	return Math.max(0, Math.round(amount * multiplier));
+}
+
+function formatDuration(ms: number): string {
+	if (ms <= 0) return "none";
+	if (ms % 3_600_000 === 0) return `${ms / 3_600_000}h`;
+	if (ms % 60_000 === 0) return `${ms / 60_000}m`;
+	if (ms % 1_000 === 0) return `${ms / 1_000}s`;
+	return `${ms}ms`;
+}
+
 function parseLoopArgs(args: string):
-	| { kind: "start"; objective: string; maxIterations: number; continuePrompt: string }
+	| { kind: "start"; objective: string; maxIterations: number; intervalMs: number; continuePrompt: string }
 	| { kind: "stop" | "pause" | "resume" | "status" | "help" } {
 	const trimmed = args.trim();
 	if (!trimmed || trimmed === "help" || trimmed === "--help" || trimmed === "-h") return { kind: "help" };
@@ -27,6 +46,7 @@ function parseLoopArgs(args: string):
 	}
 
 	let maxIterations = DEFAULT_MAX_ITERATIONS;
+	let intervalMs = 0;
 	let continuePrompt = DEFAULT_CONTINUE_PROMPT;
 	let objective = trimmed;
 
@@ -36,19 +56,31 @@ function parseLoopArgs(args: string):
 		objective = objective.replace(maxMatch[0], " ").trim();
 	}
 
+	const intervalMatch = objective.match(/(?:^|\s)--interval(?:=|\s+)(\d+(?:\.\d+)?(?:ms|s|m|h))(?=\s|$)/i);
+	if (intervalMatch) {
+		intervalMs = parseDuration(intervalMatch[1]) ?? 0;
+		objective = objective.replace(intervalMatch[0], " ").trim();
+	}
+
 	const continueMatch = objective.match(/(?:^|\s)--continue\s+"([^"]+)"(?=\s|$)/);
 	if (continueMatch) {
 		continuePrompt = continueMatch[1].trim() || DEFAULT_CONTINUE_PROMPT;
 		objective = objective.replace(continueMatch[0], " ").trim();
 	}
 
-	// Claude Code-style shorthand: `/loop 10 do the thing`.
-	if (/^\d+$/.test(first) && rest.length > 0) {
+	// Claude Code-style interval shorthand: `/loop 3m do the thing`.
+	const shorthandIntervalMs = parseDuration(first);
+	if (shorthandIntervalMs !== undefined && rest.length > 0) {
+		intervalMs = shorthandIntervalMs;
+		objective = rest.join(" ").trim();
+	}
+	// Convenience shorthand: `/loop 10 do the thing` sets max iterations.
+	else if (/^\d+$/.test(first) && rest.length > 0) {
 		maxIterations = Math.max(1, Number(first));
 		objective = rest.join(" ").trim();
 	}
 
-	return { kind: "start", objective, maxIterations, continuePrompt };
+	return { kind: "start", objective, maxIterations, intervalMs, continuePrompt };
 }
 
 function controlPrompt(state: LoopState, firstTurn: boolean): string {
@@ -69,7 +101,8 @@ function controlPrompt(state: LoopState, firstTurn: boolean): string {
 function stateSummary(state: LoopState | undefined): string {
 	if (!state?.active) return "No active /loop run.";
 	const status = state.paused ? "paused" : "active";
-	return `/loop is ${status}: turn ${state.iteration}/${state.maxIterations}\nObjective: ${state.objective}`;
+	const interval = state.intervalMs > 0 ? `\nInterval: ${formatDuration(state.intervalMs)}` : "";
+	return `/loop is ${status}: turn ${state.iteration}/${state.maxIterations}${interval}\nObjective: ${state.objective}`;
 }
 
 function getAssistantText(messages: unknown): string {
@@ -88,6 +121,14 @@ function getAssistantText(messages: unknown): string {
 
 export default function loopExtension(pi: ExtensionAPI) {
 	let state: LoopState | undefined;
+	let pendingTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function clearPendingTimer() {
+		if (pendingTimer !== undefined) {
+			clearTimeout(pendingTimer);
+			pendingTimer = undefined;
+		}
+	}
 
 	function updateUi(ctx: ExtensionContext) {
 		if (!state?.active) {
@@ -98,13 +139,15 @@ export default function loopExtension(pi: ExtensionAPI) {
 
 		const status = state.paused ? "paused" : `${state.iteration}/${state.maxIterations}`;
 		ctx.ui.setStatus("loop", `loop: ${status}`);
+		const interval = state.intervalMs > 0 ? ` every ${formatDuration(state.intervalMs)}` : "";
 		ctx.ui.setWidget("loop", [
-			`/loop ${state.paused ? "paused" : "running"} (${state.iteration}/${state.maxIterations})`,
+			`/loop ${state.paused ? "paused" : "running"} (${state.iteration}/${state.maxIterations})${interval}`,
 			state.objective,
 		]);
 	}
 
 	function stopLoop(ctx: ExtensionContext, reason: string) {
+		clearPendingTimer();
 		if (!state?.active) return;
 		state.active = false;
 		state.paused = false;
@@ -114,6 +157,7 @@ export default function loopExtension(pi: ExtensionAPI) {
 	}
 
 	function sendLoopTurn(ctx: ExtensionContext, firstTurn: boolean) {
+		clearPendingTimer();
 		if (!state?.active || state.paused) return;
 		if (state.iteration >= state.maxIterations) {
 			stopLoop(ctx, `reached max iterations (${state.maxIterations})`);
@@ -129,6 +173,21 @@ export default function loopExtension(pi: ExtensionAPI) {
 		} else {
 			pi.sendUserMessage(prompt, { deliverAs: "followUp" });
 		}
+	}
+
+	function scheduleNextLoopTurn(ctx: ExtensionContext) {
+		if (!state?.active || state.paused) return;
+		if (state.intervalMs <= 0) {
+			sendLoopTurn(ctx, false);
+			return;
+		}
+
+		clearPendingTimer();
+		ctx.ui.notify(`/loop waiting ${formatDuration(state.intervalMs)} before the next turn.`, "info");
+		pendingTimer = setTimeout(() => {
+			pendingTimer = undefined;
+			sendLoopTurn(ctx, false);
+		}, state.intervalMs);
 	}
 
 	pi.registerTool({
@@ -163,7 +222,7 @@ export default function loopExtension(pi: ExtensionAPI) {
 
 			if (parsed.kind === "help") {
 				ctx.ui.notify(
-					"Usage: /loop [--max N] <objective> | /loop N <objective> | /loop status|pause|resume|stop\nStop by calling loop_done or saying LOOP_DONE.",
+					"Usage: /loop [interval] [--max N] <objective> | /loop --interval 3m <objective> | /loop status|pause|resume|stop\nExamples: /loop 3m check PR reviews | /loop --max 10 fix tests\nStop by calling loop_done or saying LOOP_DONE.",
 					"info",
 				);
 				return;
@@ -189,6 +248,7 @@ export default function loopExtension(pi: ExtensionAPI) {
 					return;
 				}
 				state.paused = true;
+				clearPendingTimer();
 				updateUi(ctx);
 				ctx.ui.notify("/loop paused. Use /loop resume to continue.", "info");
 				return;
@@ -221,9 +281,11 @@ export default function loopExtension(pi: ExtensionAPI) {
 				objective: parsed.objective,
 				iteration: 0,
 				maxIterations: parsed.maxIterations,
+				intervalMs: parsed.intervalMs,
 				continuePrompt: parsed.continuePrompt,
 			};
-			ctx.ui.notify(`Starting /loop for up to ${parsed.maxIterations} turns.`, "info");
+			const interval = parsed.intervalMs > 0 ? ` every ${formatDuration(parsed.intervalMs)}` : "";
+			ctx.ui.notify(`Starting /loop for up to ${parsed.maxIterations} turns${interval}.`, "info");
 			sendLoopTurn(ctx, true);
 		},
 	});
@@ -237,7 +299,7 @@ export default function loopExtension(pi: ExtensionAPI) {
 			return;
 		}
 
-		sendLoopTurn(ctx, false);
+		scheduleNextLoopTurn(ctx);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
