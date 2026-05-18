@@ -40,6 +40,8 @@ After install, restart pi or run:
 
 ```text
 /loop <objective>
+/loop 3m <objective>
+/loop --interval 30s <objective>
 /loop --max 10 <objective>
 /loop 10 <objective>
 /loop status
@@ -56,6 +58,12 @@ Examples:
 
 ```text
 /loop 5 fix the failing tests, running the relevant test command after each change
+```
+
+Run every three minutes, like Claude Code's interval form:
+
+```text
+/loop 3m take a look at these prs and fix the reviews
 ```
 
 ## How it stops
@@ -78,7 +86,7 @@ The extension registers:
 - `loop_done` tool for the model to stop the loop explicitly
 - a status/widget display showing the active loop objective and iteration count
 
-Each iteration instructs the model to do exactly one useful slice of work. If the model does not stop the loop, the extension queues the next follow-up turn.
+Each iteration instructs the model to do exactly one useful slice of work. If the model does not stop the loop, the extension queues the next follow-up turn. When an interval is provided, the first turn starts immediately and subsequent turns wait for that interval. Interval loops treat each turn as a recurring scheduled tick, so the model is instructed not to stop merely because one tick succeeded.
 
 ## Package metadata
 
