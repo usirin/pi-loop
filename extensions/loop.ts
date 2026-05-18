@@ -87,14 +87,16 @@ function controlPrompt(state: LoopState, firstTurn: boolean): string {
 	const header = firstTurn
 		? `Start a /loop run for this objective:\n\n${state.objective}`
 		: state.continuePrompt;
+	const intervalInstructions =
+		state.intervalMs > 0
+			? `\n- This is an interval loop running every ${formatDuration(state.intervalMs)}. Treat this turn as one scheduled tick.\n- For interval loops, do not call loop_done merely because this tick succeeded; end normally so pi can run the next scheduled tick.\n- For interval loops, only call loop_done if the loop is permanently blocked, unsafe to continue, or the user explicitly asked you to stop.`
+			: `\n- If the objective is complete, either call the loop_done tool or include ${DONE_MARKER} in your final response.\n- If more autonomous work remains, do the next slice and end normally; pi will send the next loop turn.`;
 
 	return `${header}
 
 /loop control instructions:
-- You are in an autonomous loop. Complete exactly one useful slice of work per turn.
-- If the objective is complete, either call the loop_done tool or include ${DONE_MARKER} in your final response.
+- You are in an autonomous loop. Complete exactly one useful slice of work per turn.${intervalInstructions}
 - If you are blocked and need the user, call loop_done with the blocker as the reason.
-- If more autonomous work remains, do the next slice and end normally; pi will send the next loop turn.
 - Current loop turn: ${state.iteration + 1}/${state.maxIterations}.`;
 }
 
@@ -196,7 +198,7 @@ export default function loopExtension(pi: ExtensionAPI) {
 		description: "Stop the active /loop run when the objective is complete or blocked.",
 		promptSnippet: "Stop an active /loop run when the loop objective is complete or blocked",
 		promptGuidelines: [
-			"Use loop_done when an active /loop run has completed its objective or cannot continue without the user.",
+			"Use loop_done when a non-interval /loop run has completed its objective or any /loop run cannot continue without the user. For interval /loop runs, do not use loop_done merely because the current scheduled tick succeeded.",
 		],
 		parameters: Type.Object({
 			reason: Type.String({ description: "Why the loop should stop" }),

@@ -86,7 +86,7 @@ The extension registers:
 - `loop_done` tool for the model to stop the loop explicitly
 - a status/widget display showing the active loop objective and iteration count
 
-Each iteration instructs the model to do exactly one useful slice of work. If the model does not stop the loop, the extension queues the next follow-up turn. When an interval is provided, the first turn starts immediately and subsequent turns wait for that interval.
+Each iteration instructs the model to do exactly one useful slice of work. If the model does not stop the loop, the extension queues the next follow-up turn. When an interval is provided, the first turn starts immediately and subsequent turns wait for that interval. Interval loops treat each turn as a recurring scheduled tick, so the model is instructed not to stop merely because one tick succeeded.
 
 ## Package metadata
 
