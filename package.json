@@ -1,0 +1,47 @@
+{
+  "name": "@usirin/pi-loop",
+  "version": "0.1.0",
+  "description": "Claude Code-style /loop command for pi-coding-agent.",
+  "license": "MIT",
+  "author": "Umut Sirin",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-coding-agent",
+    "pi-extension",
+    "coding-agent",
+    "loop",
+    "claude-code"
+  ],
+  "homepage": "https://github.com/usirin/pi-loop#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/usirin/pi-loop.git"
+  },
+  "bugs": {
+    "url": "https://github.com/usirin/pi-loop/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/loop.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "pack:dry-run": "npm pack --dry-run"
+  }
+}
